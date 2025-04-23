@@ -1,0 +1,36 @@
+# 大文件和模型目录
+checkpoints/
+models/
+animation_data/
+
+# 模型文件
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+
+# 大图像和视频文件
+assets/
+*.mp4
+*.avi
+*.mov
+*.webm
+*.h264
+
+# 缓存和临时文件
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+.DS_Store
+
+# 环境和IDE文件
+.env
+.venv
+env/
+venv/
+ENV/
+.idea/
+.vscode/
