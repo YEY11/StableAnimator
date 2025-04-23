@@ -19,6 +19,12 @@ assets/
 *.webm
 *.h264
 
+# 输出文件
+basic_infer/
+inference/
+validation/
+logs/
+
 # 缓存和临时文件
 __pycache__/
 *.py[cod]
