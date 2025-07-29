@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+"""
+本脚本提供了一系列通用的图像处理和辅助函数。
+其中部分函数（如draw_*pose, handDetect, faceDetect）可能是早期版本或启发式方法，
+在当前主流程中可能未被使用，但可作为参考。
+"""
 import math
 import numpy as np
 import matplotlib
@@ -8,6 +14,11 @@ eps = 0.01
 
 
 def smart_resize(x, s):
+    """
+    智能缩放图像，根据缩放因子自动选择最佳的插值方法。
+    - 缩小图像时，使用INTER_AREA，可以避免摩尔纹。
+    - 放大图像时，使用INTER_LANCZOS4，可以获得更清晰的细节。
+    """
     Ht, Wt = s
     if x.ndim == 2:
         Ho, Wo = x.shape
@@ -15,13 +26,20 @@ def smart_resize(x, s):
     else:
         Ho, Wo, Co = x.shape
     if Co == 3 or Co == 1:
+        # 计算缩放因子
         k = float(Ht + Wt) / float(Ho + Wo)
-        return cv2.resize(x, (int(Wt), int(Ht)), interpolation=cv2.INTER_AREA if k < 1 else cv2.INTER_LANCZOS4)
+        # 根据缩放因子选择插值方法
+        interpolation = cv2.INTER_AREA if k < 1 else cv2.INTER_LANCZOS4
+        return cv2.resize(x, (int(Wt), int(Ht)), interpolation=interpolation)
     else:
+        # 如果是多通道图像（非1或3），则逐通道进行缩放
         return np.stack([smart_resize(x[:, :, i], s) for i in range(Co)], axis=2)
 
 
 def smart_resize_k(x, fx, fy):
+    """
+    与smart_resize类似，但通过x和y方向的缩放比例进行缩放。
+    """
     if x.ndim == 2:
         Ho, Wo = x.shape
         Co = 1
@@ -30,21 +48,28 @@ def smart_resize_k(x, fx, fy):
     Ht, Wt = Ho * fy, Wo * fx
     if Co == 3 or Co == 1:
         k = float(Ht + Wt) / float(Ho + Wo)
-        return cv2.resize(x, (int(Wt), int(Ht)), interpolation=cv2.INTER_AREA if k < 1 else cv2.INTER_LANCZOS4)
+        interpolation = cv2.INTER_AREA if k < 1 else cv2.INTER_LANCZOS4
+        return cv2.resize(x, (int(Wt), int(Ht)), interpolation=interpolation)
     else:
         return np.stack([smart_resize_k(x[:, :, i], fx, fy) for i in range(Co)], axis=2)
 
 
 def padRightDownCorner(img, stride, padValue):
+    """
+    在图像的右侧和底部进行填充，使其高和宽都能被stride整除。
+    这对于一些需要固定步长输入的卷积网络是必要的。
+    """
     h = img.shape[0]
     w = img.shape[1]
 
     pad = 4 * [None]
-    pad[0] = 0 # up
-    pad[1] = 0 # left
-    pad[2] = 0 if (h % stride == 0) else stride - (h % stride) # down
-    pad[3] = 0 if (w % stride == 0) else stride - (w % stride) # right
+    pad[0] = 0  # 上方不填充
+    pad[1] = 0  # 左侧不填充
+    pad[2] = 0 if (h % stride == 0) else stride - (h % stride)  # 底部需要填充的像素数
+    pad[3] = 0 if (w % stride == 0) else stride - (w % stride)  # 右侧需要填充的像素数
 
+    # 注意：这里使用了较为复杂的np.tile和np.concatenate实现，
+    # 更简洁的方式是使用 cv2.copyMakeBorder(img, pad[0], pad[2], pad[1], pad[3], cv2.BORDER_CONSTANT, value=padValue)
     img_padded = img
     pad_up = np.tile(img_padded[0:1, :, :]*0 + padValue, (pad[0], 1, 1))
     img_padded = np.concatenate((pad_up, img_padded), axis=0)
@@ -59,13 +84,21 @@ def padRightDownCorner(img, stride, padValue):
 
 
 def transfer(model, model_weights):
+    """
+    迁移模型权重。将在一个模型上训练的权重迁移到另一个结构相同但层命名可能不同的模型上。
+    常用于加载PyTorch中用DataParallel训练的模型权重，它会自动为层名添加'module.'前缀，
+    此函数可以去除该前缀。
+    """
     transfered_model_weights = {}
     for weights_name in model.state_dict().keys():
+        # 去除权重名称的第一个部分（如 'module.'）
         transfered_model_weights[weights_name] = model_weights['.'.join(weights_name.split('.')[1:])]
     return transfered_model_weights
 
 
+# 注意：以下的draw_*pose函数是旧版本或不带置信度混合的版本，与主脚本中的版本功能类似但细节不同。
 def draw_bodypose(canvas, candidate, subset):
+    """绘制身体姿态（简化版，不使用置信度进行颜色混合）。"""
     H, W, C = canvas.shape
     candidate = np.array(candidate)
     subset = np.array(subset)
@@ -110,6 +143,7 @@ def draw_bodypose(canvas, candidate, subset):
 
 
 def draw_handpose(canvas, all_hand_peaks):
+    """绘制手部姿态（简化版，不使用置信度进行颜色混合）。"""
     H, W, C = canvas.shape
 
     edges = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [0, 9], [9, 10], \
@@ -138,6 +172,7 @@ def draw_handpose(canvas, all_hand_peaks):
 
 
 def draw_facepose(canvas, all_lmks):
+    """绘制面部关键点（简化版，不使用置信度进行颜色混合）。"""
     H, W, C = canvas.shape
     for lmks in all_lmks:
         lmks = np.array(lmks)
@@ -150,9 +185,13 @@ def draw_facepose(canvas, all_lmks):
     return canvas
 
 
+# 注意：以下handDetect和faceDetect函数是基于身体关键点来推断手和脸包围盒的启发式方法。
+# 在当前DWPose流程中，已由更强大的YOLOX检测器替代，这些函数可能未被使用。
 # detect hand according to body pose keypoints
 # please refer to https://github.com/CMU-Perceptual-Computing-Lab/openpose/blob/master/src/openpose/hand/handDetector.cpp
 def handDetect(candidate, subset, oriImg):
+    """根据身体姿态关键点（肩、肘、腕）来启发式地检测手部区域。"""
+    # 启发式几何计算逻辑
     # right hand: wrist 4, elbow 3, shoulder 2
     # left hand: wrist 7, elbow 6, shoulder 5
     ratioWristElbow = 0.33
@@ -219,6 +258,8 @@ def handDetect(candidate, subset, oriImg):
 
 # Written by Lvmin
 def faceDetect(candidate, subset, oriImg):
+    """根据身体姿态关键点（头、眼、耳）来启发式地检测面部区域。"""
+    # 启发式几何计算逻辑
     # left right eye ear 14 15 16 17
     detect_result = []
     image_height, image_width = oriImg.shape[0:2]
@@ -290,6 +331,9 @@ def faceDetect(candidate, subset, oriImg):
 
 # get max index of 2d array
 def npmax(array):
+    """
+    找到2D numpy数组中最大值的索引(i, j)。
+    """
     arrayindex = array.argmax(1)
     arrayvalue = array.max(1)
     i = arrayvalue.argmax()
