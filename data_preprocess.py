@@ -6,6 +6,7 @@ StableAnimator 数据集自动化预处理脚本
 本脚本旨在为 StableAnimator 项目提供一个全自动的数据集准备工具。
 它能够处理大量的原始视频文件，并将其转换为模型训练所需的格式，包括：
 - 视频抽帧（默认 16 FPS）
+- 统一帧分辨率 (例如 rec: 512x512, vec: 576x1024)
 - 根据分辨率自动分类 (rec/vec)
 - 提取人脸遮罩 (face mask)
 - 提取人体姿态骨架 (pose)
@@ -20,13 +21,14 @@ StableAnimator 数据集自动化预处理脚本
 
 使用示例:
 - 完整处理 (默认16fps): python data_preprocess.py
+- 完整处理并统一分辨率: python data_preprocess.py --uniform_resolution
 - 指定抽帧为8fps: python data_preprocess.py --fps=8
 - 仅抽帧: python data_preprocess.py --extract_frames_only
 - 使用 GPU 0,1 加速: python data_preprocess.py --gpus=0,1
 - 清理所有结果: python data_preprocess.py --clean --force
 
-完整示例：同时指定原始视频目录、目标目录、GPU、抽帧频率等参数:
-python data_preprocess.py --raw_videos_dir=animation_data/raw_videos --target_dir=animation_data/fashion_sub7_fps8 --gpus=0,1 --fps=8
+完整示例：同时指定原始视频目录、目标目录、GPU、抽帧频率、并统一分辨率:
+python data_preprocess.py --raw_videos_dir=animation_data/raw_videos --target_dir=animation_data/fashion_sub7_fps16 --gpus=0,1 --fps=16 --uniform_resolution
 """
 
 import os
@@ -187,6 +189,61 @@ def extract_frames(video_path, output_dir, fps=16):
         logger.error(f"提取帧失败 {video_path}: {str(e)}")
         return False
 
+# <--- 新增函数开始 --->
+def resize_and_crop_frames(images_dir, target_size=(512, 512)):
+    """
+    将目录中的所有图像调整到目标尺寸，通过缩放和中心裁剪来避免形变。
+
+    Args:
+        images_dir (str): 包含待处理图像的目录。
+        target_size (tuple[int, int]): 目标 (宽度, 高度)。
+
+    Returns:
+        bool: 如果所有图像都成功处理则返回 True，否则返回 False。
+    """
+    try:
+        target_width, target_height = target_size
+        image_paths = glob.glob(os.path.join(images_dir, "*.png"))
+        if not image_paths:
+            logger.warning(f"在 {images_dir} 中未找到可调整大小的图像。")
+            return True # 目录为空，也算成功
+
+        for img_path in image_paths:
+            img = cv2.imread(img_path)
+            if img is None:
+                logger.warning(f"无法读取图像: {img_path}")
+                continue
+
+            original_height, original_width, _ = img.shape
+
+            # 计算缩放比例，选择较大的比例以确保能完全覆盖目标区域
+            scale_w = target_width / original_width
+            scale_h = target_height / original_height
+            scale = max(scale_w, scale_h)
+
+            # 计算缩放后的新尺寸
+            new_width = int(original_width * scale)
+            new_height = int(original_height * scale)
+
+            # 使用 INTER_AREA 插值进行缩放，这对于缩小图像效果更好
+            resized_img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_AREA)
+
+            # 计算中心裁剪的起始点
+            y_start = (new_height - target_height) // 2
+            x_start = (new_width - target_width) // 2
+
+            # 执行裁剪
+            cropped_img = resized_img[y_start:y_start + target_height, x_start:x_start + target_width]
+
+            # 覆盖原始文件
+            cv2.imwrite(img_path, cropped_img)
+        
+        return True
+    except Exception as e:
+        logger.error(f"在调整和裁剪 {images_dir} 中的图像时发生错误: {str(e)}")
+        logger.error(traceback.format_exc())
+        return False
+# <--- 新增函数结束 --->
 
 def extract_face_masks(stableanimator_dir, image_folder, video_dir, gpu_id=None):
     """
@@ -468,6 +525,7 @@ def save_progress_state(args, rec_dirs, vec_dirs, processed_videos):
                 'raw_videos_dir': args.raw_videos_dir,
                 'skip_pose': args.skip_pose,
                 'fps': args.fps,
+                'uniform_resolution': args.uniform_resolution, # <--- 新增保存项
             }
         }
         with open(progress_file, 'wb') as f:
@@ -501,8 +559,9 @@ def load_progress_state(args):
         # 检查状态文件是否与当前参数兼容，不兼容则从头开始
         if (state['args']['target_dir'] != args.target_dir or
             state['args']['video_resolution'] != args.video_resolution or
-            state['args'].get('fps', 16) != args.fps): # 检查fps是否一致
-            logger.warning("进度状态文件与当前参数不匹配（如目标目录或FPS），将从头开始处理")
+            state['args'].get('fps', 16) != args.fps or
+            state['args'].get('uniform_resolution', False) != args.uniform_resolution): # <--- 新增检查项
+            logger.warning("进度状态文件与当前参数不匹配（如目标目录, FPS或分辨率统一设置），将从头开始处理")
             return None
 
         timestamp = state.get('timestamp', 0)
@@ -583,6 +642,7 @@ def process_video_task(args_dict):
             target_type = forced_type
             is_rec = (forced_type == "rec")
         else:
+            # 这里的判断逻辑保持不变，分辨率统一在后面处理
             if width <= 512 and height <= 512:
                 target_type = "rec"
                 is_rec = True
@@ -615,13 +675,22 @@ def process_video_task(args_dict):
             shutil.rmtree(video_dir, ignore_errors=True)
             return None
 
-        # 步骤 4.2: 提取人脸遮罩
+        # 步骤 4.2: 统一分辨率 (如果启用)
+        if args.uniform_resolution:
+            target_size = (512, 512) if is_rec else (576, 1024)
+            logger.info(f"[{task_id}] 统一分辨率为 {target_size} (宽x高)...")
+            if not resize_and_crop_frames(images_dir, target_size):
+                logger.error(f"跳过视频 {video_path} (统一分辨率失败)")
+                shutil.rmtree(video_dir, ignore_errors=True)
+                return None
+
+        # 步骤 4.3: 提取人脸遮罩
         if extract_mask:
             logger.info(f"[{task_id}] 提取人脸遮罩...")
             if not extract_face_masks(args.stableanimator_dir, images_dir, video_dir, gpu_id):
                 logger.warning(f"[{task_id}] 人脸遮罩提取失败: {video_dir}")
 
-        # 步骤 4.3: 提取姿态骨架
+        # 步骤 4.4: 提取姿态骨架
         if extract_pose and not args.skip_pose:
             logger.info(f"[{task_id}] 提取姿态骨架...")
             if not extract_poses_for_video(args.stableanimator_dir, video_dir, gpu_id):
@@ -661,7 +730,7 @@ def process_video_task(args_dict):
                 del shared_dict['in_progress_hashes'][video_hash]
         return None
 
-
+# ... (其余函数保持不变) ...
 def process_video_batch(args, video_files, extract_mask=True, extract_pose=True):
     """
     使用多进程并行处理一个批次的视频文件。
@@ -1035,6 +1104,8 @@ def main():
     parser.add_argument('--video_resolution', type=str, choices=['rec', 'vec'], default=None, help='强制指定视频分辨率类型 (rec/vec)。默认为自动判断。')
     parser.add_argument('--fps', type=int, default=16, help='指定抽帧频率 (FPS)。0 表示使用视频原始帧率。默认: 16')
     parser.add_argument('--skip_pose', action='store_true', help='在完整流程中跳过姿态提取步骤')
+    # <--- 新增参数 --->
+    parser.add_argument('--uniform_resolution', action='store_true', help='启用统一分辨率处理，将所有视频帧调整为标准尺寸 (rec: 512x512, vec: 576x1024)')
 
     # 并发控制参数
     parser.add_argument('--max_workers', type=int, default=min(32, cpu_count()), help='并行处理的最大进程数')
@@ -1071,6 +1142,7 @@ def main():
 
     logger.info(f"使用 {args.max_workers} 个工作进程进行并发处理。")
     if args.gpus: logger.info(f"使用 GPU: {args.gpus}")
+    if args.uniform_resolution: logger.info("已启用统一分辨率处理模式。") # <--- 新增日志
 
     # 分步执行模式
     if args.check_dataset: check_dataset(args); return
@@ -1129,19 +1201,22 @@ StableAnimator 数据集准备工具使用指南:
 1. 完整处理流程 (默认从 ./animation_data/raw_videos/ 读取视频):
    python data_preprocess.py
 
-2. 从指定目录读取视频:
+2. 完整处理并统一所有帧的分辨率 (推荐):
+   python data_preprocess.py --uniform_resolution
+
+3. 从指定目录读取视频:
    python data_preprocess.py --raw_videos_dir /path/to/my/videos
 
-3. 强制指定视频分辨率类型:
+4. 强制指定视频分辨率类型:
    python data_preprocess.py --video_resolution=rec  (强制所有视频为 512x512 类别)
    python data_preprocess.py --video_resolution=vec  (强制所有视频为 576x1024 类别)
 
-4. 分步执行:
+5. 分步执行:
    python data_preprocess.py --extract_frames_only
    python data_preprocess.py --extract_faces_only
    python data_preprocess.py --extract_poses_only
 
-5. 其他常用参数:
+6. 其他常用参数:
    --fps=8                  (以8fps抽帧)
    --skip_pose              (在完整流程中跳过姿态提取)
    --max_workers=8          (使用8个进程)
