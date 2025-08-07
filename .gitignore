@@ -40,3 +40,10 @@ venv/
 ENV/
 .idea/
 .vscode/
+
+# 历史版本文件归档
+*.bak
+*.old
+*.tmp
+archive/
+tmp*/

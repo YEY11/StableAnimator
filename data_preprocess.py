@@ -28,7 +28,7 @@ StableAnimator 数据集自动化预处理脚本
 - 清理所有结果: python data_preprocess.py --clean --force
 
 完整示例：同时指定原始视频目录、目标目录、GPU、抽帧频率、并统一分辨率:
-python data_preprocess.py --raw_videos_dir=animation_data/raw_videos --target_dir=animation_data/fashion_sub7_fps16 --gpus=0,1 --fps=16 --uniform_resolution
+python data_preprocess.py --raw_videos_dir=animation_data/raw_videos --target_dir=animation_data/fashion_sub7_fps8 --gpus=6,7 --fps=8 --uniform_resolution
 """
 
 import os
